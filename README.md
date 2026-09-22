@@ -1,99 +1,102 @@
 docker-ip2proxy-mongodb
-==========================
+=======================
 
-This is a pre-configured, ready-to-run MongoDB server with IP2Proxy Proxy IP database. It simplifies the development team to install and set up the proxy IP database in MongoDB server. The setup script supports the [commercial database packages](https://www.ip2location.com/database/ip2proxy) and [free LITE package](https://lite.ip2location.com). Please register for a download account before running this image.
-
+A ready-to-run MongoDB server preloaded with an [IP2Proxy](https://www.ip2location.com/database/ip2proxy) proxy IP database. Supports the commercial packages and the free [LITE](https://lite.ip2location.com) package. Register for an account first as download token is required.
 
 
 
 ## Usage
 
-1. Create a dedicated network so that your application containers can communicate with the IP2Proxy container by name.
-
-    ```bash
-    docker network create ip2proxy-network
-    ```
-
-2. Run this image as daemon using the download token and product code from [IP2Location LITE](https://lite.ip2location.com) or [IP2Location](https://www.ip2location.com) and attaching it to the network created above.
-    ```bash
-    docker run --name ip2proxy \
-    --network ip2proxy-network \
-    -d \
-    -e TOKEN={DOWNLOAD_TOKEN} \
-    -e CODE={DOWNLOAD_CODE} \
-    -e MONGODB_PASSWORD={MONGODB_PASSWORD} \
-    ip2proxy/mongodb
-    ```
-
-    **ENV Variables**
-
-    `TOKEN` – Download token obtained from IP2Location.
-    `CODE` – The CSV file download code. You may get the download code from your account panel.
-
-    `MONGODB_PASSWORD` - Password for MongoDB admin.
-
-3. The installation may take seconds to minutes depending on your database sizes, downloading speed and hardware specs. You may check the installation status by viewing the container logs. Run the below command to check the container log:
-    ```bash
-    docker logs -f ip2proxy
-    ```
-
-    You should see the line `> Setup completed` if you have successfully completed the installation.
-
-
-
-## Connect from an Application
-
-Run your application container on the same network. The IP2Proxy container is reachable by its container name (`ip2proxy`) as the hostname:
-
 ```bash
-docker run --network ip2proxy-network -t -i {YOUR_APPLICATION}
+docker network create ip2proxy-network
+
+docker run --name ip2proxy \
+  --network ip2proxy-network \
+  -d \
+  -e TOKEN={DOWNLOAD_TOKEN} \
+  -e CODE={DOWNLOAD_CODE} \
+  -e IP_TYPE=IPV4 \
+  -e MONGODB_PASSWORD={MONGODB_PASSWORD} \
+  ip2proxy/mongodb
+
+docker logs -f ip2proxy      # Wait for "✓ Setup completed"
 ```
 
+**ENV Variables**
+
+| Variable | Description |
+|---|---|
+| `TOKEN` | Download token. Required. |
+| `CODE` | Database code. Required. See below. |
+| `IP_TYPE` | `IPV4` (default) or `IPV6`. |
+| `MONGODB_PASSWORD` | Password for the `mongoAdmin` user. Random if omitted. |
+
+**`CODE`** — Free Database: `PX1-LITE`, `PX2-LITE`, `PX3-LITE`, `PX4-LITE`, `PX5-LITE`, `PX6-LITE`, `PX7-LITE`, `PX8-LITE`, `PX9-LITE`, `PX10-LITE`, `PX11-LITE`, `PX12-LITE`.
+Commercial Database: `PX1`, `PX2`, `PX3`, `PX4`, `PX5`, `PX6`, `PX7`, `PX8`, `PX9`, `PX10`, `PX11`, `PX12`.
+
+Only one address family is installed per container. To switch, start a fresh container with an empty `/data/db` — an existing install is not converted in place, and re-running with different settings prints a note explaining that.
+
+The admin password is written to `/ip2proxy.conf` inside the container, so `docker logs` and `docker exec` access are equivalent to knowing it.
+
+To start over:
+
+```bash
+docker rm -f ip2proxy
+docker volume rm ip2proxy-data        # if you used -v ip2proxy-data:/data/db
+```
 
 
 
 ## Query for IP Information
 
-1. In your application container, Iinstall MongoDB and Mongo Shell first by following the installation steps in https://docs.mongodb.com/manual/tutorial/install-mongodb-on-debian/.
+Four fields matter. `ip_from` and `ip_to` are the IP **numbers** bounding the range; `ip_from_index` and `ip_to_index` are those same numbers zero-padded to 40 characters and prefixed with `A`, which is what makes range comparison work as a string. Which pair you filter on depends on the `IP_TYPE` you installed.
 
-2. Run the Mongo Shell with the password you've specified during the installation and connect to `ip2proxy` host.
-    ```bash
-    mongosh --host ip2proxy -u mongoAdmin -p {MONGODB_PASSWORD} --authenticationDatabase admin
-    ```
+**Both bounds are required.** The database lists only addresses that have proxy data, so the ranges are sparse: they do not cover the address space and most addresses sit in a gap between two ranges. A query on `ip_to` alone matches a large part of the collection, and `findOne` returns an arbitrary one of those matches — reporting a proxy record for an address that is not a proxy.
 
-3. To test the IPv4 database, key in the commands below to query proxy info for IPv4 address `8.8.8.8` (IP number: 134744072).
-    ```sql
-    use ip2proxy_database
-    db.ip2proxy_database.findOne( { $and: [ { ip_from: { $lte: 134744072 } }, { ip_to: { $gte: 134744072 } } ] } )
-    ```
+**IPv4** — both IP numbers as plain strings:
 
-4. To test the IPv6 database, key in the commands below to query proxy info for IPv6 address `2001:4860:4860::8888` (IP number: 42541956123769884636017138956568135816).
-    ```sql
-    use ip2proxy_database
-    db.ip2proxy_database.findOne( { $and: [ { ip_from_index: { $lte: "A0042541956123769884636017138956568135816" } }, { ip_to_index: { $gte: "A0042541956123769884636017138956568135816" } } ] } )
-    ```
+```js
+use ip2proxy_database
+db.ip2proxy_database.findOne( { $and: [ { ip_from: { $lte: "134744072" } }, { ip_to: { $gte: "134744072" } } ] } )
+```
 
-    If you don't know how to convert an IP address to IP number, please see [IP2Location FAQs](https://www.ip2location.com/faqs#technical).
+**IPv6** — the padded, `A`-prefixed form. For `2001:4860:4860::8888` the IP number is `42541956123769884636017138956568135816`:
 
-    
+```js
+use ip2proxy_database
+db.ip2proxy_database.findOne( { $and: [ { ip_from_index: { $lte: "A0042541956123769884636017138956568135816" } }, { ip_to_index: { $gte: "A0042541956123769884636017138956568135816" } } ] } )
+```
 
-    **NOTES**: The search param for IPv4 database is a number BUT the param for IPv6 database is a string of the IP number left-padded with zeroes till 40 characters and prefixed with an "A".
-    Also, IPv6 database is filtering on the `ip_from_index` and `ip_to_index` fields while IPv4 database is filtering on the `ip_from` and `ip_to` fields.
-    When querying IPv4 address using the IPv6 database, you need to convert the IPv4 address into [IPv4-mapped IPv6 address](https://blog.ip2location.com/knowledge-base/ipv4-mapped-ipv6-address/) before converting to IP number.
+**Every search value is a quoted string.** `mongoimport --type csv` imports each CSV value as text unless the field types are declared, so the unquoted form `{ ip_to: { $gte: 134744072 } }` matches **nothing** and returns `null` — BSON compares across types by type order, and numbers sort before strings.
+
+To convert an address to an IP number see the [IP2Location FAQs](https://www.ip2location.com/faqs#technical).
+
+
+
+## Connect from an Application
+
+Put your application on the same network and reach the container by name (`ip2proxy`):
+
+```bash
+docker run --network ip2proxy-network -t -i {YOUR_APPLICATION}
+```
+
+```bash
+mongosh --host ip2proxy -u mongoAdmin -p {MONGODB_PASSWORD} --authenticationDatabase admin
+```
 
 
 
 ## Update IP2Proxy Database
 
-To update your IP2Proxy database to latest version, please run the following  command:
-
 ```bash
-docker exec -it ip2proxy ./update.sh
+docker exec -it ip2proxy /update.sh
 ```
+
+Imports a fresh copy and swaps it in with `renameCollection(..., true)`, so queries keep working against the old data until the swap. The daily download quota is limited. If you get `[QUOTA EXCEEDED]` error, please try again after 24 hours.
 
 
 
 ## Articles and Tutorials
 
-You can visit the below link for more information about this docker image:
 [IP2Proxy Articles and Tutorials](https://blog.ip2location.com)
